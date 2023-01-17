@@ -3,7 +3,6 @@ import os
 import time
 from datetime import timedelta
 from logging.handlers import RotatingFileHandler
-from pprint import pprint
 
 import requests
 import telegram
@@ -11,7 +10,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DAYS_TO_CHECK = 10
+DAYS_CHECK = 10
 PRACTICUM_TOKEN = os.getenv('PRACTICUM_TOKEN')
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
@@ -33,7 +32,7 @@ old_request_data = {}
 
 
 def check_tokens() -> bool:
-    """Проверка наличия значений необходимых токенов и ID чат-бота"""
+    """Проверка наличия значений необходимых токенов и ID чат-бота."""
     status = True
     if not PRACTICUM_TOKEN:
         logger.critical(
@@ -54,7 +53,7 @@ def check_tokens() -> bool:
 
 
 def send_message(bot: telegram.bot, message: str) -> None:
-    """Отправка сообщения через бота"""
+    """Отправка сообщения через бота."""
     try:
         bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
         logger.debug(f'Сообщение: {message} отправлено')
@@ -63,7 +62,7 @@ def send_message(bot: telegram.bot, message: str) -> None:
 
 
 def get_api_answer(timestamp: int) -> dict:
-    """Обращение к API практикума для получения статусов работ"""
+    """Обращение к API практикума для получения статусов работ."""
     payload = {'from_date': timestamp}
     try:
         rec = requests.get(ENDPOINT, headers=HEADERS, params=payload)
@@ -77,10 +76,10 @@ def get_api_answer(timestamp: int) -> dict:
 
 
 def check_response(response: dict) -> None:
-    """Проверка ответа от API на допустимость данных"""
+    """Проверка ответа от API на допустимость данных."""
     try:
         homeworks = response['homeworks']
-    except KeyError as error:
+    except KeyError:
         logger.error("В ответе API отсутствует элемент homeworks!")
     if type(homeworks) != list:
         logger.error('В ответе API элемент homeworks не является списком!')
@@ -88,18 +87,18 @@ def check_response(response: dict) -> None:
 
 
 def parse_status(homework: dict) -> str:
-    """Проверка статуса домашней работы"""
+    """Проверка статуса домашней работы."""
     global old_request_data
 
     try:
         homework_name = homework['homework_name']
-    except KeyError as error:
+    except KeyError:
         logger.error('Отсутствует ключ homework_name')
     try:
         status = homework['status']
         verdict = HOMEWORK_VERDICTS[status]
-    except KeyError as error:
-        logger.error(f'Отсутствует или недокументированный ',
+    except KeyError:
+        logger.error('Отсутствует или недокументированный ',
                      f'статус домашнего задания {homework_name}')
     if old_request_data.get(homework_name) != verdict:
         old_request_data[homework_name] = verdict
@@ -109,8 +108,9 @@ def parse_status(homework: dict) -> str:
 
 
 def create_logger(logger: logging.Logger) -> logging.Logger:
-    """Создает 2 типа логгеров: в стандартный вывод и в файл
-    уровень логгирования DEBUG"""
+    """Создает 2 типа логгеров: в стандартный вывод и в файл.
+    Уровень логгирования DEBUG.
+    """
     formatter = logging.Formatter(
         '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
@@ -127,18 +127,15 @@ def create_logger(logger: logging.Logger) -> logging.Logger:
 
 def main() -> None:
     """Основная логика работы бота."""
-
-    if check_tokens() != True:
+    if not check_tokens():
         logger.critical("Установлены не все необходимые переменные!")
         exit(1)
 
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
-
-    timestamp = int(time.time()) - \
-        int(timedelta(days=DAYS_TO_CHECK).total_seconds())
+    timestamp = int(time.time() - timedelta(days=DAYS_CHECK).total_seconds())
     send_message(
         bot=bot,
-        message=f'Бот запущен, проверяем за последние {DAYS_TO_CHECK} дней')
+        message=f'Бот запущен, проверяем за последние {DAYS_CHECK} дней')
     while True:
         try:
             response = get_api_answer(timestamp)
