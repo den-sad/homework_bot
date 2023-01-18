@@ -8,6 +8,8 @@ import requests
 import telegram
 from dotenv import load_dotenv
 
+from exceptions import SendMessageException
+
 load_dotenv()
 
 DAYS_CHECK = 10
@@ -19,8 +21,6 @@ RETRY_PERIOD = 600
 ENDPOINT = 'https://practicum.yandex.ru/api/user_api/homework_statuses/'
 HEADERS = {'Authorization': PRACTICUM_TOKEN}
 
-UPDATE_INTERVAL = 60 * 10
-
 HOMEWORK_VERDICTS = {
     'approved': 'Работа проверена: ревьюеру всё понравилось. Ура!',
     'reviewing': 'Работа взята на проверку ревьюером.',
@@ -28,42 +28,36 @@ HOMEWORK_VERDICTS = {
 }
 
 logger = logging.getLogger(__name__)
-old_request_data = {}
 
 
 def check_tokens() -> bool:
     """Проверка наличия значений необходимых токенов и ID чат-бота."""
-    status = True
     if not PRACTICUM_TOKEN:
-        logger.critical(
-            'Отсутствует необходимая переменная PRACTICUM_TOKEN.',
-            'Работа программы не возможна!')
-        status = False
+        return False
     if not TELEGRAM_TOKEN:
-        logger.critical(
-            'Отсутствует необходимая переменная TELEGRAM_TOKEN.',
-            'Работа программы не возможна!')
-        status = False
+        return False
     if not TELEGRAM_CHAT_ID:
-        logger.critical(
-            'Отсутствует необходимая переменная TELEGRAM_CHAT_ID.',
-            'Работа программы не возможна!')
-        status = False
-    return status
+        return False
+    return True
 
 
 def send_message(bot: telegram.bot, message: str) -> None:
     """Отправка сообщения через бота."""
+    logger.debug(f'Отправляем сообщение: {message}')
     try:
         bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
-        logger.debug(f'Сообщение: {message} отправлено')
+        logger.debug(f'Сообщение: {message} -> отправлено')
     except Exception as error:
-        logger.error(f'Сообщение: {message} не отправлено. Ошибка {error}')
+        # для ревью - в тестах заложена необходимость наличия
+        # логгирования с уровнем error в данной функции
+        logger.error(f'Сообщение: {message} -> не отправлено!')
+        raise SendMessageException(error)
 
 
 def get_api_answer(timestamp: int) -> dict:
     """Обращение к API практикума для получения статусов работ."""
     payload = {'from_date': timestamp}
+    logger.debug('Начинаем запрос к API')
     try:
         rec = requests.get(ENDPOINT, headers=HEADERS, params=payload)
     except requests.RequestException as error:
@@ -81,15 +75,19 @@ def check_response(response: dict) -> None:
         homeworks = response['homeworks']
     except KeyError:
         logger.error("В ответе API отсутствует элемент homeworks!")
+        keys = ''
+        for key in response.keys():
+            keys = keys + key + ';'
+        logger.error(f"Обнаружены ключи: {keys}")
     if type(homeworks) != list:
-        logger.error('В ответе API элемент homeworks не является списком!')
-        raise TypeError('В ответе API элемент homeworks не является списком!')
+        logger.error('В ответе API элемент homeworks не является списком! '
+                     f'homeworks -> {type(homeworks).__name__}')
+        raise TypeError('В ответе API элемент homeworks не является списком! ',
+                        f'homeworks -> {type(homeworks).__name__}')
 
 
 def parse_status(homework: dict) -> str:
     """Проверка статуса домашней работы."""
-    global old_request_data
-
     try:
         homework_name = homework['homework_name']
     except KeyError:
@@ -100,11 +98,8 @@ def parse_status(homework: dict) -> str:
     except KeyError:
         logger.error('Отсутствует или недокументированный ',
                      f'статус домашнего задания {homework_name}')
-    if old_request_data.get(homework_name) != verdict:
-        old_request_data[homework_name] = verdict
-        return f'Изменился статус проверки работы "{homework_name}". {verdict}'
-    else:
-        return ""
+
+    return f'Изменился статус проверки работы "{homework_name}". {verdict}'
 
 
 def create_logger(logger: logging.Logger) -> logging.Logger:
@@ -128,11 +123,16 @@ def create_logger(logger: logging.Logger) -> logging.Logger:
 def main() -> None:
     """Основная логика работы бота."""
     if not check_tokens():
-        logger.critical("Установлены не все необходимые переменные!")
+        logger.critical(
+            "Установлены не все необходимые переменные! ",
+            "Работа программы не возможна")
         exit(1)
+    else:
+        logger.debug("Все необходимые переменные установлены")
 
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time() - timedelta(days=DAYS_CHECK).total_seconds())
+    old_result = {}
     send_message(
         bot=bot,
         message=f'Бот запущен, проверяем за последние {DAYS_CHECK} дней')
@@ -144,8 +144,13 @@ def main() -> None:
                 logger.info('Найдены домашние работы')
                 for homework in response['homeworks']:
                     result = parse_status(homework)
-                    if len(result) != 0:
+                    homework_name = homework['homework_name']
+                    if result != old_result.get(homework_name):
+                        old_result[homework_name] = result
                         send_message(bot, result)
+                    else:
+                        logger.debug(
+                            f'Статус работы: {homework_name} -> не изменился')
             else:
                 logger.info('Домашних работ не найдено!')
         except Exception as error:
@@ -153,7 +158,7 @@ def main() -> None:
             logger.error(message)
             send_message(bot=bot, message=message)
 
-        time.sleep(UPDATE_INTERVAL)
+        time.sleep(RETRY_PERIOD)
 
 
 if __name__ == '__main__':
